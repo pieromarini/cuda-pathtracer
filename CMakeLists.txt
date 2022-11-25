@@ -20,6 +20,7 @@ target_compile_options(cpd_lib PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:
                        --relocatable-device-code=true
                        >)
 
-add_executable(cpd_app test.cpp)
-set_target_property(cpd_app PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+add_executable(cpd_app "${CMAKE_SOURCE_DIR}/app.cpp")
+target_compile_features(cpd_app PUBLIC cxx_std_20)
+target_include_directories(cpd_app PUBLIC "${CMAKE_SOURCE_DIR}/src")
 target_link_libraries(cpd_app PRIVATE cpd_lib)
