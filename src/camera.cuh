@@ -1,16 +1,16 @@
 #pragma once
 
-#include "math.cuh"
+#include "point.cuh"
 #include "ray.cuh"
+#include "vector.cuh"
 
 struct Camera {
-  Vec3 pos;
-  Vec3 lower_left;
-  Vec3 h;
-  Vec3 v;
+  Point3 position;
+  Point3 lower_left;
+  Vec3 vertical;
+  Vec3 horizontal;
 
-  Camera() {}
-  Camera(float vfov, float aspect, const Vec3& look_from, const Vec3& look_at, const Vec3& view_up);
+  Camera(float vfov, float aspect, Point3 look_from, Point3 look_at);
 
-  __device__ Ray get_ray(float s, float t) const;
+  __host__ __device__ Ray get_ray(float u, float v) const;
 };

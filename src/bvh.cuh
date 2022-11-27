@@ -1,20 +1,27 @@
 #pragma once
 
-#include "cuda.cuh"
-#include "primitive.cuh"
-#include "vector.cuh"
+#include "aabb.cuh"
+#include "tri_array.cuh"
 
 struct BVHNode {
-  Slab s;
-  int left;
+  AABB box;
   int right;
+  int left;
 };
 
 struct BVH {
-  Vector<BVHNode> nodes;
+  TriangleArray primitives;
+  Vector<BVHNode> tree;
 
-  void to_host() { nodes.to_host(); }
-  void to_device() { nodes.to_device(); }
+  cudaChannelFormatDesc channelDesc;
+  cudaArray_t cuArray;
+  struct cudaResourceDesc resDesc;
+  struct cudaTextureDesc texDesc;
+  cudaTextureObject_t texObj;
+
+  __host__ BVH(TriangleArray tris);
+
+  __device__ BVHNode fetch_node(int idx) const;
+
+  __device__ TriangleArrayIntersection intersects(Ray r) const;
 };
-
-__host__ BVH build_bvh(const Vector<Primitive>& prims);

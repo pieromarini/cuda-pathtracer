@@ -1,13 +1,12 @@
 #pragma once
 
-#include "math.cuh"
-#include "cuda.cuh"
+#include "point.cuh"
+#include "vector.cuh"
 
 struct Ray {
-  Vec3 o;
+  Point3 o;
   Vec3 d;
 
-  __device__ Ray(const Vec3& o, const Vec3& d) : o(o), d(normalized(d)) {}
-
-  __device__ Vec3 at(float t) const;
+  __host__ __device__ Ray(Point3 o_, Vec3 d_) : o(o_), d(normalized(d_)) {}
+  __host__ __device__ Point3 at(float t) const;
 };

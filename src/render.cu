@@ -1,64 +1,104 @@
-#include "render.cuh"
-#include "intersection.cuh"
-#include "path.cuh"
-#include "random.cuh"
+#include "bvh.cuh"
+#include "camera.cuh"
+#include "image.cuh"
+#include "scoped_timer.cuh"
+#include "sphere.cuh"
+#include "tri_array.cuh"
 
-#include <ctime>
 #include <chrono>
-#include <ratio>
+#include <functional>
+#include <iostream>
+#include <math.h>
+#include <algorithm>
+#include <thread>
 
-__global__ void render_kernel(RenderParams params, Scene scene, Image im) {
-  int xid = blockDim.x * blockIdx.x + threadIdx.x;
-  int yid = blockDim.y * blockIdx.y + threadIdx.y;
+struct Path {
+  Ray cur;
+  float3 L;
+  int px;
+  int py;
+  bool active;
+};
 
-  if (xid >= im.width || yid >= im.height) {
+__global__ void init_paths(Vector<Path> pq, Camera cam, unsigned int w, unsigned int h, unsigned int spp, unsigned int paths_processed) {
+  unsigned int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
+
+  int pp = paths_processed + idx;
+
+  if (idx >= pq.size)
 	return;
-  }
 
-  int tid = yid * im.width + xid;
+  int spp_rt = (int)sqrtf((float)spp);
 
-  LocalDeviceRNG local_gen = scene.gen.local(tid);
+  int sample = pp / (w * h);
+  int coord = pp % (w * h);
+  int x = coord % w;
+  int y = coord / w;
+  int sx = sample % spp_rt;
+  int sy = sample / spp_rt;
 
-  Vec3 colour(0.f);
-  Vec3 colour_tmp;
-  float u, v;
-  for (int i = 0; i < params.spp; i++) {
-	u = ((float)xid + local_gen.generate()) / (float)(im.width);
-	v = ((float)yid + local_gen.generate()) / (float)(im.height);
+  float u = ((float)x + (float)sx / (float)spp_rt) / (float)w;
+  float v = ((float)y + (float)sy / (float)spp_rt) / (float)h;
 
-	colour_tmp = trace(scene.cam.get_ray(u, v), scene, local_gen, 50);
-	colour_tmp.e[0] = fmax(fmin(colour_tmp.e[0], 1.f), 0.f);
-	colour_tmp.e[1] = fmax(fmin(colour_tmp.e[1], 1.f), 0.f);
-	colour_tmp.e[2] = fmax(fmin(colour_tmp.e[2], 1.f), 0.f);
-	colour += colour_tmp;
-  }
-  colour /= (float)(params.spp);
+  Ray r = cam.get_ray(u, v);
 
-  im.film[tid] = colour;
+  pq[idx] = { r, { 0, 0, 0 }, x, y, true };
 }
 
-__host__ void render(const RenderParams& params, Scene& scene, Image& im) {
-  scene.to_device();
-  im.to_device();
+__global__ void advance_paths(BVH bvh, Vector<Path> pq, Image out, float spp) {
+  unsigned int idx = (blockIdx.x * blockDim.x) + threadIdx.x;
 
-  int nx = im.width;
-  int ny = im.height;
+  if (idx >= pq.size)
+	return;
 
-  if (scene.gen.state == NULL) scene.gen = DeviceRNG(nx * ny);
+  Path p = pq[idx];
+  Ray r = p.cur;
 
-  dim3 threads(16, 16);
-  dim3 blocks(nx / threads.x + 1, ny / threads.y + 1);
+  auto i = bvh.intersects(r);
 
-  printf("Rendering...\n");
-  auto t1 = std::chrono::high_resolution_clock::now();
-  render_kernel<<<blocks, threads>>>(params, scene, im);
-  cudaCheckError();
-  cudaDeviceSynchronize();
+  if (i.hit) {
+	pq[idx].cur = Ray(i.point, i.normal);
+	Vec3 normal = i.normal;
+	p.L.x += (normal.x + 1.0) / 2.0;
+	p.L.y += (normal.y + 1.0) / 2.0;
+	p.L.z += (normal.z + 1.0) / 2.0;
+  }
 
-  auto t2 = std::chrono::high_resolution_clock::now();
-  auto seconds = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-  printf("Finished in %f seconds\n", seconds);
+  out[p.py * out.width + p.px] += p.L / spp;
+}
 
-  scene.to_host();
-  im.to_host();
+Image render(TriangleArray tris, Camera cam, unsigned int w, unsigned int h) {
+  Image out(w, h);
+
+  for (int i = 0; i < w * h; i++) {
+	out[i] = { 0, 0, 0 };
+  }
+
+  BVH bvh(tris);
+
+  ScopedMicroTimer x_([&](int us) { printf("Rendered in %.2f ms\n", (double)us / 1000.0); });
+
+  unsigned int spp = 1;
+
+  unsigned int total_paths = w * h * spp;
+
+  unsigned int path_queue_size = std::min(total_paths, (unsigned int)(1024 * 1024 * 32));
+  Vector<Path> path_queue(path_queue_size);
+
+  unsigned int paths_processed = 0, rounds = 0;
+  while (paths_processed < total_paths) {
+	dim3 block(128);
+	dim3 grid((path_queue_size + 127) / 128);
+	init_paths<<<grid, block>>>(path_queue, cam, w, h, spp, paths_processed);
+	cudaDeviceSynchronize();
+	cudaCheckError();
+	advance_paths<<<grid, block>>>(bvh, path_queue, out, (float)spp);
+	cudaDeviceSynchronize();
+	cudaCheckError();
+
+	rounds++;
+	paths_processed += path_queue_size;
+  }
+
+  return out;
 }
