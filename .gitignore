@@ -11,3 +11,7 @@ test
 data/
 *.ppm
 output/
+.cache
+compile_commands.json
+*.pdf
+build
